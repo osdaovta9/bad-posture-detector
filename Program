@@ -1,0 +1,177 @@
+#Se instala mediapipe como esta en la guia de colab para su instalación
+!git clone https://github.com/AssemblyAI-Examples/mediapipe-python.git
+!pip install mediapipe
+!pip install PyQt5
+!pip install ipython==7.32.0
+!pip install mediapipe --upgrade
+
+#Se intala notify-py para poder lanzar las alertas al usuario
+!pip install notify-py
+
+import math
+import cv2
+import mediapipe as mp
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import os
+from google.colab.patches import cv2_imshow
+from notifypy import Notify
+
+# Se crean variables para que la libreria mediapipe sea más eficiente
+mp_pose = mp.solutions.pose
+mp_drawing = mp.solutions.drawing_utils
+mp_drawing_styles = mp.solutions.drawing_styles
+
+# Se lee el directorio actual en el que se esta trabajando
+current_directory = os.getcwd()
+
+# Se lee el directorio donde se tienen almacenadas las imagenes
+images_directory = os.path.join(current_directory, 'images')
+
+# Función para calcular el ángulo en 3D entre tres puntos
+def calculate_3d_angle(p1, p2, p3, reference=None):
+    if reference is None:
+        # Calcular el vector desde p1 a p2 y desde p1 a p3
+        v1 = np.array(p2) - np.array(p1)
+        v2 = np.array(p3) - np.array(p1)
+    else:
+        # Calcular el vector desde p1 a p2 y desde p1 a p3 con respecto a la referencia
+        v1 = np.array(p2) - np.array(p1)
+        v2 = np.array(p3) - np.array(p1)
+        reference_vector = np.array(reference[1]) - np.array(reference[0])
+        v1 = v1 - np.dot(v1, reference_vector) * reference_vector / np.dot(reference_vector, reference_vector)
+        v2 = v2 - np.dot(v2, reference_vector) * reference_vector / np.dot(reference_vector, reference_vector)
+
+# Función para calcular los ángulos en 2D
+def calculate_2d_angles(landmarks_2d, joint1, joint2, joint_midpoint):
+    # Calcular ángulo entre joint1 y joint_midpoint
+    angle1_rad = math.atan2(landmarks_2d[joint_midpoint][1] - landmarks_2d[joint1][1],
+                            landmarks_2d[joint_midpoint][0] - landmarks_2d[joint1][0])
+    angle1_deg = math.degrees(angle1_rad)
+    
+    # Calcular ángulo entre joint2 y joint_midpoint
+    angle2_rad = math.atan2(landmarks_2d[joint_midpoint][1] - landmarks_2d[joint2][1],
+                            landmarks_2d[joint_midpoint][0] - landmarks_2d[joint2][0])
+    angle2_deg = math.degrees(angle2_rad)
+    
+    # Calcular la diferencia de ángulos
+    angle_diff_deg = abs(angle1_deg - angle2_deg)
+    
+    return angle_diff_deg
+
+# Función para evaluar si una persona tiene una postura óptima sentado
+def evaluate_posture_seat(spine_angle_deg, knee_angle_deg):
+    # Definir los rangos aceptables para la espalda y las rodillas en grados
+    acceptable_spine_range = (90, 120)
+    acceptable_knee_range = (90, 190)
+    
+    # Verificar si la espalda y las rodillas están dentro de los rangos aceptables
+    if acceptable_spine_range[0] <= spine_angle_deg <= acceptable_spine_range[1] and \
+       acceptable_knee_range[0] <= knee_angle_deg <= acceptable_knee_range[1]:
+        return True
+    else:
+        return False
+
+# Función para evaluar la postura óptima solo en el ángulo de la columna
+def evaluate_column_posture(spine_angle_deg):
+    # Definir el rango aceptable para el ángulo de la columna en grados
+    acceptable_spine_range = (90, 120)
+    
+    # Verificar si el ángulo de la columna está dentro del rango aceptable
+    if acceptable_spine_range[0] <= spine_angle_deg <= acceptable_spine_range[1]:
+        return True
+    else:
+        return False
+
+# Función para evaluar si una persona tiene una postura óptima de pie
+def evaluate_standing_posture(spine_angle_deg):
+    # Definir el rango aceptable para el ángulo de la columna en grados
+    acceptable_spine_range = (90, 120)
+    
+    # Verificar si el ángulo de la columna está dentro del rango aceptable para una postura óptima de pie
+    if acceptable_spine_range[0] <= spine_angle_deg <= acceptable_spine_range[1]:
+        return True
+    else:
+        return False
+
+# Función para procesar la imagen y calcular la postura
+def process_image():
+    # Cargar la imagen
+    vid = cv2.VideoCapture(0)
+
+    # Se inicializa media pipe
+    with mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5) as pose:
+        
+
+
+        while vid.isOpened():
+            # Leer un fotograma de la cámara web
+            ret, frame = vid.read()
+            if not ret:
+                break
+
+            # Convertir el fotograma en una imagen RGB
+            image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # Detectar landmarks de la pose en el fotograma
+            results = pose.process(image_rgb)
+
+            if results.pose_landmarks:
+                # Extraer puntos clave relevantes
+                landmarks = results.pose_landmarks.landmark
+
+                # Obtener coordenadas 2D de los puntos clave de la pose
+                landmarks_2d = [(landmark.x * image_rgb.shape[1], landmark.y * image_rgb.shape[0]) for landmark in landmarks if landmark.visibility > 0]
+                # Definir los índices de los puntos clave relevantes
+                spine_midpoint = mp_pose.PoseLandmark.LEFT_SHOULDER.value
+                hip_joint = mp_pose.PoseLandmark.LEFT_HIP.value
+                knee_joint = mp_pose.PoseLandmark.LEFT_KNEE.value
+                # Calcular el ángulo de la columna en 2D
+                spine_angle_deg = calculate_2d_angles(landmarks_2d, spine_midpoint, hip_joint, knee_joint)
+
+                # Dibujar los landmarks y los grafos en la imagen
+                annotated_image = image_rgb.copy()
+                mp_drawing.draw_landmarks(annotated_image, results.pose_landmarks, mp_pose.POSE_CONNECTIONS,
+                                          landmark_drawing_spec=mp_drawing_styles.get_default_pose_landmarks_style())
+                # Mostrar la imagen con los landmarks y los grafos
+                cv2_imshow(annotated_image)
+                # Evaluar la postura
+                if knee_joint == 0:
+                    # Si no se ven las piernas, verificar si la persona está de pie
+                    if (160 <= spine_angle_deg <= 200):
+                        if evaluate_standing_posture(spine_angle_deg):
+                            None
+                        else:
+                            alert = Notify()
+                            alert.title = "Non-ergonomic position"
+                            alert.message = "You are standing in a non-optimal position."
+                            alert.icon = "/content/26a0.png"
+                            alert.send()
+                    else:
+                        knee_angle_deg = calculate_2d_angles(landmarks_2d, hip_joint, knee_joint, spine_midpoint)
+                    if evaluate_column_posture(spine_angle_deg, knee_angle_deg):
+                        None
+                    else:
+                        alert = Notify()
+                        alert.title = "Non-ergonomic position"
+                        alert.message = "You are sitting in a non-optimal position."
+                        alert.icon = "/content/26a0.png"
+                        alert.send()
+                else:
+                    # Si se ven las piernas, verificar si la persona está bien sentada
+                    knee_angle_deg = calculate_2d_angles(landmarks_2d, hip_joint, knee_joint, spine_midpoint)
+                    if evaluate_posture_seat(spine_angle_deg, knee_angle_deg):
+                        None
+                    else:
+                        alert = Notify()
+                        alert.title = "Non-ergonomic position"
+                        alert.message = "You are sitting in a non-optimal position."
+                        alert.icon = "/content/26a0.png"
+                        alert.send()
+            # Salir del bucle si se presiona la tecla 'q'
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+# Inicialización del programa
+process_image()
